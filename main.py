@@ -14,8 +14,17 @@
     q, ESC  종료
 """
 
+import argparse
+import time
+
 import cv2
 import numpy as np
+
+# 카메라가 첫 프레임을 내보내기까지 몇 번의 시도가 필요할 수 있다.
+WARMUP_ATTEMPTS = 20
+WARMUP_DELAY = 0.1
+# 실행 중 일시적인 읽기 실패는 이 횟수까지 넘긴다.
+MAX_CONSECUTIVE_FAILURES = 30
 
 # 프리셋: (다운스케일 배율, 블러 커널, JPEG 품질)
 # 배율이 작을수록 해상도를 더 떨어뜨린다.
@@ -104,26 +113,63 @@ def draw_status(frame, text):
     return frame
 
 
-def main():
-    cap = cv2.VideoCapture(0)
+def open_camera(index, width=1280, height=720):
+    """카메라를 열고 첫 프레임이 나올 때까지 기다린다.
+
+    맥에서는 장치가 준비되기 전에 read()가 몇 번 실패하는 일이 흔하므로
+    곧바로 포기하지 않는다.
+    """
+    cap = cv2.VideoCapture(index)
     if not cap.isOpened():
+        cap.release()
         raise SystemExit(
-            "웹캠을 열 수 없습니다. macOS라면 터미널 앱에 카메라 권한이 있는지 확인하세요.\n"
-            "시스템 설정 > 개인정보 보호 및 보안 > 카메라"
+            f"카메라 {index}번을 열 수 없습니다. --camera 로 다른 번호를 시도해보세요.\n"
+            "권한 문제라면: 시스템 설정 > 개인정보 보호 및 보안 > 카메라"
         )
 
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
 
-    reducer = QualityReducer(preset=3)
+    for _ in range(WARMUP_ATTEMPTS):
+        ok, frame = cap.read()
+        if ok and frame is not None:
+            h, w = frame.shape[:2]
+            print(f"카메라 {index}번 연결됨 ({w}x{h})")
+            return cap
+        time.sleep(WARMUP_DELAY)
+
+    cap.release()
+    raise SystemExit(
+        f"카메라 {index}번은 열렸지만 프레임이 오지 않습니다.\n"
+        "다른 앱이 카메라를 쓰고 있거나, 연속성 카메라(iPhone)가 준비되지 않았을 수 있습니다.\n"
+        "--camera 로 다른 번호를 시도해보세요."
+    )
+
+
+def main():
+    parser = argparse.ArgumentParser(description="웹캠 화질 저하 미리보기")
+    parser.add_argument("--camera", type=int, default=0, help="카메라 인덱스 (기본 0)")
+    parser.add_argument("--preset", type=int, default=3, choices=sorted(PRESETS), help="시작 강도")
+    args = parser.parse_args()
+
+    cap = open_camera(args.camera)
+
+    reducer = QualityReducer(preset=args.preset)
     compare = False
     window = "webcam-blur (q to quit)"
 
+    failures = 0
     while True:
         ok, frame = cap.read()
-        if not ok:
-            print("프레임을 읽지 못했습니다.")
-            break
+        if not ok or frame is None:
+            # 간헐적인 실패는 흔하므로 한 번 놓쳤다고 종료하지 않는다.
+            failures += 1
+            if failures > MAX_CONSECUTIVE_FAILURES:
+                print("카메라에서 프레임이 계속 오지 않아 종료합니다.")
+                break
+            time.sleep(0.02)
+            continue
+        failures = 0
 
         frame = cv2.flip(frame, 1)  # 거울 모드가 자기 모습 확인엔 자연스럽다
         out = reducer.process(frame)
