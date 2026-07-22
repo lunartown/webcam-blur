@@ -11,7 +11,7 @@ import time
 import webbrowser
 
 import cv2
-from PySide6.QtCore import QCameraPermission, Qt, QTimer, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
@@ -30,6 +30,12 @@ from PySide6.QtWidgets import (
 )
 
 from camera import CameraSource, available_cameras
+from macos_camera_permission import (
+    AUTHORIZED,
+    NOT_DETERMINED,
+    authorization_status,
+    request_access,
+)
 from quality import PRESET_LABELS, PRESETS, QualityReducer
 from updater import check_for_update
 from vcam import VirtualCamera, VirtualCameraError
@@ -153,11 +159,13 @@ class PreviewLabel(QLabel):
 
 class MainWindow(QMainWindow):
     update_checked = Signal(object)
+    camera_permission_resolved = Signal(bool)
 
     def __init__(self):
         super().__init__()
         self.setWindowTitle("webcam-blur")
         self.update_checked.connect(self._on_update_checked)
+        self.camera_permission_resolved.connect(self._on_camera_permission_result)
 
         self.reducer = QualityReducer(preset=3)
         self.current_preset = 3
@@ -167,7 +175,6 @@ class MainWindow(QMainWindow):
         self.source_size = (0, 0)
         self._frame_times = []
         self._last_frame_at = None
-        self._camera_permission = QCameraPermission()
         self._permission_request_pending = False
 
         self._build_ui()
@@ -365,34 +372,29 @@ class MainWindow(QMainWindow):
 
     # ---------- 카메라 ----------
 
-    def _camera_permission_status(self):
-        app = QApplication.instance()
-        if app is None:
-            return Qt.PermissionStatus.Denied
-        return app.checkPermission(self._camera_permission)
-
     def _ensure_camera_permission(self):
-        status = self._camera_permission_status()
-        if status == Qt.PermissionStatus.Granted:
+        status = authorization_status()
+        if status == AUTHORIZED:
             self._permission_request_pending = False
             self._load_cameras_and_start()
             return
 
         self._stop_camera_source()
+        if status != NOT_DETERMINED:
+            self._permission_request_pending = False
+            self._show_camera_permission_denied()
+            return
+
         self._show_camera_permission_pending()
         if self._permission_request_pending:
             return
 
         self._permission_request_pending = True
-        QApplication.instance().requestPermission(
-            self._camera_permission,
-            self,
-            self._on_camera_permission_result,
-        )
+        request_access(self.camera_permission_resolved.emit)
 
-    def _on_camera_permission_result(self, _permission):
+    def _on_camera_permission_result(self, granted):
         self._permission_request_pending = False
-        if self._camera_permission_status() == Qt.PermissionStatus.Granted:
+        if granted or authorization_status() == AUTHORIZED:
             self._load_cameras_and_start()
         else:
             self._show_camera_permission_denied()
@@ -424,7 +426,7 @@ class MainWindow(QMainWindow):
         self._schedule_camera_watchdog()
 
     def _refresh_cameras(self):
-        if self._camera_permission_status() != Qt.PermissionStatus.Granted:
+        if authorization_status() != AUTHORIZED:
             self._ensure_camera_permission()
             return
 

@@ -1,6 +1,7 @@
 opencv-python
 numpy
 PySide6
+pyobjc-framework-AVFoundation
 
 # 가상 카메라 출력. macOS Camera Extension 설치가 따로 필요하다.
 # https://github.com/lunartown/camsink
