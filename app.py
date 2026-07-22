@@ -549,6 +549,18 @@ def main():
     window = MainWindow()
     window.resize(920, 600)
     window.show()
+
+    if os.environ.get("WEBCAM_BLUR_CAMERA_PROBE"):
+        def report_probe():
+            print(f"source_size={window.source_size}", flush=True)
+            print(f"last_frame={window._last_frame_at is not None}", flush=True)
+            print(f"input_status={window.input_status.text()}", flush=True)
+            print(f"status={window.status.currentMessage()}", flush=True)
+            window.close()
+
+        QTimer.singleShot(4500, report_probe)
+        QTimer.singleShot(4600, app.quit)
+
     if os.environ.get("WEBCAM_BLUR_SMOKE_TEST"):
         QTimer.singleShot(1500, window.close)
         QTimer.singleShot(1600, app.quit)
