@@ -379,11 +379,6 @@ class MainWindow(QMainWindow):
             return
 
         self._stop_camera_source()
-        if status == Qt.PermissionStatus.Denied:
-            self._permission_request_pending = False
-            self._show_camera_permission_denied()
-            return
-
         self._show_camera_permission_pending()
         if self._permission_request_pending:
             return
