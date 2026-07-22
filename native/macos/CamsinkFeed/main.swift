@@ -67,11 +67,26 @@ func allowExtensionDevices() {
         UInt32(MemoryLayout<UInt32>.size), &allow)
 }
 
+/// OpenCV 의 AVFoundation 백엔드와 같은 순서로 카메라를 열거한다.
+///
+/// OpenCV 는 이 discovery session 이 돌려준 배열의 위치를 그대로 카메라
+/// 번호로 쓴다. Qt(QMediaDevices)의 순서는 이것과 다를 수 있어서, 이름만
+/// Qt 에서 가져다 쓰면 엉뚱한 장치를 열게 된다.
+func videoDevices() -> [AVCaptureDevice] {
+    AVCaptureDevice.DiscoverySession(
+        deviceTypes: [.builtInWideAngleCamera, .external, .deskViewCamera, .continuityCamera],
+        mediaType: .video, position: .unspecified).devices
+}
+
 func findCaptureDevice(named name: String) -> AVCaptureDevice? {
-    let session = AVCaptureDevice.DiscoverySession(
-        deviceTypes: [.external, .deskViewCamera, .builtInWideAngleCamera],
-        mediaType: .video, position: .unspecified)
-    return session.devices.first { $0.localizedName == name }
+    videoDevices().first { $0.localizedName == name }
+}
+
+/// 장치 목록을 "인덱스<탭>이름" 으로 출력한다.
+func listDevices() {
+    for (index, device) in videoDevices().enumerated() {
+        print("\(index)\t\(device.localizedName)")
+    }
 }
 
 func findCMIODevice(uid: String) -> CMIOObjectID? {
@@ -229,6 +244,11 @@ func readFully(into buffer: UnsafeMutableRawPointer, count: Int) -> Bool {
 }
 
 // MARK: - 진입점
+
+if CommandLine.arguments.contains("--list") {
+    listDevices()
+    exit(0)
+}
 
 let options = Options.parse()
 let feeder = Feeder(width: options.width, height: options.height)

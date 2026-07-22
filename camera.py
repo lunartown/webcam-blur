@@ -34,6 +34,14 @@ def device_names():
         return []
 
 
+# 가상 카메라를 입력으로 고르면 자기 출력을 다시 읽어 피드백 루프가 생긴다.
+VIRTUAL_CAMERA_NAMES = ("camsink", "obs virtual camera")
+
+
+def _is_virtual(name):
+    return name.strip().lower() in VIRTUAL_CAMERA_NAMES
+
+
 def available_cameras():
     """카메라 목록을 [(인덱스, 표시이름)]로 돌려준다.
 
@@ -45,7 +53,10 @@ def available_cameras():
     if names:
         # Qt와 OpenCV가 같은 순서로 장치를 열거한다고 보고 위치로 대응시킨다.
         # 어긋나면 선택한 카메라가 열리지 않고, 그때 이전 카메라로 되돌아간다.
-        return list(enumerate(names))
+        #
+        # 거르는 건 인덱스를 매긴 뒤에 해야 한다. 먼저 거르면 뒤쪽 카메라의
+        # 인덱스가 밀려서 엉뚱한 장치가 열린다.
+        return [(i, n) for i, n in enumerate(names) if not _is_virtual(n)]
 
     # Qt가 아무것도 못 찾은 경우에만 직접 열어보며 찾는다.
     found = []
