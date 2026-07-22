@@ -23,11 +23,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from camera import CameraThread, available_cameras
+from camera import CameraSource, available_cameras
 from quality import PRESET_LABELS, PRESETS, QualityReducer
 from vcam import VirtualCamera, VirtualCameraError
 
-CAPTURE_RESOLUTION = (1280, 720)
 PREVIEW_MIN_SIZE = (640, 360)
 
 
@@ -48,7 +47,7 @@ class MainWindow(QMainWindow):
         self.reducer = QualityReducer(preset=3)
         self.vcam = VirtualCamera()
         self.cameras = available_cameras()
-        self.thread = None
+        self.source = None
         self.source_size = (0, 0)
         self._frame_times = []
 
@@ -83,10 +82,11 @@ class MainWindow(QMainWindow):
         row = QHBoxLayout()
 
         self.camera_combo = QComboBox()
-        for index, name in self.cameras:
-            self.camera_combo.addItem(name, index)
+        for device in self.cameras:
+            # 번호가 아니라 장치 자체를 들고 있는다.
+            self.camera_combo.addItem(device.description(), device)
         if not self.cameras:
-            self.camera_combo.addItem("카메라 없음", -1)
+            self.camera_combo.addItem("카메라 없음", None)
             self.camera_combo.setEnabled(False)
         self.camera_combo.currentIndexChanged.connect(self._on_camera_changed)
         row.addWidget(QLabel("카메라"))
@@ -133,30 +133,22 @@ class MainWindow(QMainWindow):
             )
             return
 
-        self.thread = CameraThread(self.camera_combo.currentData(), CAPTURE_RESOLUTION)
-        self.thread.frame_ready.connect(self._on_frame)
-        self.thread.error.connect(self._on_error)
-        self.thread.opened.connect(self._on_opened)
-        self.thread.reverted.connect(self._on_reverted)
-        self.thread.start()
+        self.source = CameraSource(self)
+        self.source.frame_ready.connect(self._on_frame)
+        self.source.error.connect(self._on_error)
+        self.source.opened.connect(self._on_opened)
+        self.source.start(self.camera_combo.currentData())
 
     def _on_camera_changed(self):
-        if self.thread is not None:
-            self.thread.set_camera(self.camera_combo.currentData())
+        device = self.camera_combo.currentData()
+        if self.source is not None and device is not None:
+            self.source.start(device)
 
     def _on_opened(self, width, height):
         self.source_size = (width, height)
 
     def _on_error(self, message):
         self.status.showMessage(message, 5000)
-
-    def _on_reverted(self, index):
-        """전환에 실패해 이전 카메라로 돌아갔으면 드롭다운도 되돌린다."""
-        position = self.camera_combo.findData(index)
-        if position >= 0:
-            self.camera_combo.blockSignals(True)
-            self.camera_combo.setCurrentIndex(position)
-            self.camera_combo.blockSignals(False)
 
     # ---------- 컨트롤 ----------
 
@@ -206,8 +198,6 @@ class MainWindow(QMainWindow):
         )
 
         self._frame_times.append(time.monotonic())
-        if self.thread is not None:
-            self.thread.frame_consumed()
 
     def _update_status(self):
         now = time.monotonic()
@@ -229,8 +219,8 @@ class MainWindow(QMainWindow):
         self.status.showMessage("  |  ".join(parts))
 
     def closeEvent(self, event):
-        if self.thread is not None:
-            self.thread.stop()
+        if self.source is not None:
+            self.source.stop()
         self.vcam.close()
         super().closeEvent(event)
 
