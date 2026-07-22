@@ -7,3 +7,6 @@ native/macos/build/
 *.xcuserdatad
 xcuserdata/
 DerivedData/
+
+# Swift 헬퍼 빌드 산출물
+native/macos/bin/
