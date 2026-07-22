@@ -62,7 +62,8 @@ def qimage_to_bgr(image):
     stride = image.bytesPerLine()
     buffer = np.frombuffer(image.constBits(), dtype=np.uint8, count=stride * height)
     # 행마다 여백이 붙을 수 있어 실제 폭만 잘라낸다.
-    return buffer.reshape(height, stride // 3, 3)[:, :width, :]
+    rows = buffer.reshape(height, stride)
+    return rows[:, : width * 3].reshape(height, width, 3).copy()
 
 
 class CameraSource(QObject):
