@@ -35,24 +35,27 @@ def device_names():
 
 
 def available_cameras():
-    """실제로 프레임이 나오는 카메라만 [(인덱스, 표시이름)]로 돌려준다."""
+    """카메라 목록을 [(인덱스, 표시이름)]로 돌려준다.
+
+    장치를 하나하나 열어보며 확인하면 정확하지만, 맥에서는 카메라 하나를
+    여는 데만 몇 초가 걸려 창이 뜨기 전에 오래 멈춘다. 그래서 Qt에 목록만
+    물어보고, 실제 열기는 사용자가 고른 것 하나만 시도한다.
+    """
+    names = device_names()
+    if names:
+        # Qt와 OpenCV가 같은 순서로 장치를 열거한다고 보고 위치로 대응시킨다.
+        # 어긋나면 선택한 카메라가 열리지 않고, 그때 이전 카메라로 되돌아간다.
+        return list(enumerate(names))
+
+    # Qt가 아무것도 못 찾은 경우에만 직접 열어보며 찾는다.
     found = []
     for index in range(MAX_PROBE_INDEX):
         cap = cv2.VideoCapture(index)
-        if not cap.isOpened():
-            cap.release()
-            continue
-        ok, frame = _warmup(cap)
+        opened = cap.isOpened()
         cap.release()
-        if ok:
-            found.append(index)
-
-    names = device_names()
-    use_names = len(names) == len(found)
-    return [
-        (idx, names[i] if use_names else f"카메라 {idx}")
-        for i, idx in enumerate(found)
-    ]
+        if opened:
+            found.append((index, f"카메라 {index}"))
+    return found
 
 
 def _warmup(cap):
@@ -75,6 +78,7 @@ class CameraThread(QThread):
     frame_ready = Signal(object)     # numpy BGR 프레임
     error = Signal(str)
     opened = Signal(int, int)        # 실제 적용된 width, height
+    reverted = Signal(int)           # 전환 실패로 되돌아간 카메라 인덱스
 
     def __init__(self, index=0, resolution=(1280, 720), parent=None):
         super().__init__(parent)
@@ -104,18 +108,29 @@ class CameraThread(QThread):
         self._running = True
         cap = None
         failures = 0
+        last_good = None
 
         while self._running:
-            if self._reopen:
+            # cap이 None인 경우도 함께 처리한다. 열기에 실패한 뒤 그대로
+            # read()를 호출하면 스레드가 죽어버린다.
+            if self._reopen or cap is None:
                 self._reopen = False
                 if cap is not None:
                     cap.release()
+                    cap = None
                 cap = self._open()
                 if cap is None:
-                    # _open이 이미 사유를 보고했다. 재선택을 기다린다.
-                    self.msleep(200)
+                    # _open이 이미 사유를 보고했다.
+                    if last_good is not None and self._index != last_good:
+                        # 마지막으로 잘 되던 카메라로 되돌린다.
+                        self._index = last_good
+                        self.reverted.emit(last_good)
+                    else:
+                        self.msleep(500)
                     continue
+                last_good = self._index
                 failures = 0
+                self._pending = False   # 재오픈 시 대기 상태가 남지 않게
 
             ok, frame = cap.read()
             if not ok or frame is None:
