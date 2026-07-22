@@ -35,3 +35,22 @@ python -m compileall app.py camera.py quality.py vcam.py main.py tests
 
 가상 카메라가 활성화되어 있으면 앱에서 `가상 카메라 시작`을 누른 뒤 Zoom, Google
 Meet, Teams 같은 앱에서 `camsink` 카메라를 선택하면 됩니다.
+
+## macOS 앱/DMG 빌드
+
+```bash
+./scripts/package_macos.sh
+```
+
+결과물은 `release/webcam-blur-<version>.dmg`에 만들어집니다. Developer ID
+인증서가 키체인에 있으면 앱과 DMG가 서명됩니다.
+
+공증까지 한 번에 하려면 App Store Connect API 키 환경변수를 넣고 실행합니다.
+
+```bash
+ASC_KEY_ID=... ASC_ISSUER_ID=... ./scripts/package_macos.sh --notarize
+```
+
+앱의 `업데이트 확인` 버튼은 GitHub Releases의 최신 릴리스를 확인합니다. 새 버전을
+배포할 때는 `version.py`의 `APP_VERSION`을 올리고 DMG를 빌드한 뒤, `v<version>`
+태그의 GitHub Release에 DMG 파일을 첨부하세요.

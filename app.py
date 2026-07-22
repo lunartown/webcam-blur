@@ -4,11 +4,14 @@
 가상 카메라 송출. 회의 직전에 열어서 바로 쓰는 도구라 선택지를 늘리지 않았다.
 """
 
+import os
 import sys
+import threading
 import time
+import webbrowser
 
 import cv2
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
@@ -26,7 +29,9 @@ from PySide6.QtWidgets import (
 
 from camera import CameraSource, available_cameras
 from quality import PRESET_LABELS, PRESETS, QualityReducer
+from updater import check_for_update
 from vcam import VirtualCamera, VirtualCameraError
+from version import APP_VERSION
 
 PREVIEW_MIN_SIZE = (640, 360)
 
@@ -183,9 +188,12 @@ def to_pixmap(frame):
 
 
 class MainWindow(QMainWindow):
+    update_checked = Signal(object)
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("webcam-blur")
+        self.update_checked.connect(self._on_update_checked)
 
         self.reducer = QualityReducer(preset=3)
         self.current_preset = 3
@@ -233,11 +241,15 @@ class MainWindow(QMainWindow):
         text.setSpacing(2)
         title = QLabel("webcam-blur")
         title.setObjectName("title")
-        self.header_status = QLabel("카메라 준비 중")
+        self.header_status = QLabel(f"v{APP_VERSION} · 카메라 준비 중")
         self.header_status.setObjectName("subtle")
         text.addWidget(title)
         text.addWidget(self.header_status)
         row.addLayout(text, stretch=1)
+
+        self.update_button = QPushButton("업데이트 확인")
+        self.update_button.clicked.connect(self._check_for_updates)
+        row.addWidget(self.update_button)
 
         self.refresh_button = QPushButton("새로고침")
         self.refresh_button.clicked.connect(self._refresh_cameras)
@@ -360,6 +372,51 @@ class MainWindow(QMainWindow):
         label.setProperty("tone", tone)
         label.style().unpolish(label)
         label.style().polish(label)
+
+    # ---------- 업데이트 ----------
+
+    def _check_for_updates(self):
+        self.update_button.setEnabled(False)
+        self.update_button.setText("확인 중")
+        threading.Thread(target=self._check_for_updates_worker, daemon=True).start()
+
+    def _check_for_updates_worker(self):
+        try:
+            result = check_for_update()
+        except Exception as exc:
+            result = exc
+        self.update_checked.emit(result)
+
+    def _on_update_checked(self, result):
+        self.update_button.setEnabled(True)
+        self.update_button.setText("업데이트 확인")
+
+        if isinstance(result, Exception):
+            QMessageBox.warning(self, "업데이트 확인 실패", str(result))
+            return
+
+        if result is None:
+            QMessageBox.information(
+                self,
+                "최신 버전입니다",
+                f"현재 v{APP_VERSION}이 설치되어 있습니다.",
+            )
+            return
+
+        message = (
+            f"새 버전 v{result.version}을 사용할 수 있습니다.\n\n"
+            "DMG를 내려받아 앱을 교체하세요."
+        )
+        box = QMessageBox(self)
+        box.setWindowTitle("업데이트 사용 가능")
+        box.setText(message)
+        if result.body:
+            box.setInformativeText(result.body[:1000])
+        download = box.addButton("DMG 다운로드", QMessageBox.AcceptRole)
+        box.addButton("나중에", QMessageBox.RejectRole)
+        box.exec()
+        if box.clickedButton() == download:
+            webbrowser.open(result.url)
 
     # ---------- 카메라 ----------
 
@@ -522,6 +579,9 @@ def main():
     window = MainWindow()
     window.resize(900, 560)
     window.show()
+    if os.environ.get("WEBCAM_BLUR_SMOKE_TEST"):
+        QTimer.singleShot(1500, window.close)
+        QTimer.singleShot(1600, app.quit)
     sys.exit(app.exec())
 
 
