@@ -11,7 +11,7 @@ import time
 import webbrowser
 
 import cv2
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import QCameraPermission, Qt, QTimer, Signal
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
@@ -162,14 +162,16 @@ class MainWindow(QMainWindow):
         self.reducer = QualityReducer(preset=3)
         self.current_preset = 3
         self.vcam = VirtualCamera()
-        self.cameras = available_cameras()
+        self.cameras = []
         self.source = None
         self.source_size = (0, 0)
         self._frame_times = []
         self._last_frame_at = None
+        self._camera_permission = QCameraPermission()
+        self._permission_request_pending = False
 
         self._build_ui()
-        self._start_camera()
+        QTimer.singleShot(0, self._ensure_camera_permission)
 
     # ---------- UI 구성 ----------
 
@@ -311,7 +313,7 @@ class MainWindow(QMainWindow):
             self.camera_combo.setCurrentIndex(selected_index)
             self.camera_combo.setEnabled(True)
         else:
-            self.camera_combo.addItem("카메라 없음", None)
+            self.camera_combo.addItem("카메라 준비 중", None)
             self.camera_combo.setEnabled(False)
 
         self.camera_combo.blockSignals(False)
@@ -363,41 +365,78 @@ class MainWindow(QMainWindow):
 
     # ---------- 카메라 ----------
 
+    def _camera_permission_status(self):
+        app = QApplication.instance()
+        if app is None:
+            return Qt.PermissionStatus.Denied
+        return app.checkPermission(self._camera_permission)
+
+    def _ensure_camera_permission(self):
+        status = self._camera_permission_status()
+        if status == Qt.PermissionStatus.Granted:
+            self._permission_request_pending = False
+            self._load_cameras_and_start()
+            return
+
+        self._stop_camera_source()
+        if status == Qt.PermissionStatus.Denied:
+            self._permission_request_pending = False
+            self._show_camera_permission_denied()
+            return
+
+        self._show_camera_permission_pending()
+        if self._permission_request_pending:
+            return
+
+        self._permission_request_pending = True
+        QApplication.instance().requestPermission(
+            self._camera_permission,
+            self,
+            self._on_camera_permission_result,
+        )
+
+    def _on_camera_permission_result(self, _permission):
+        self._permission_request_pending = False
+        if self._camera_permission_status() == Qt.PermissionStatus.Granted:
+            self._load_cameras_and_start()
+        else:
+            self._show_camera_permission_denied()
+
+    def _load_cameras_and_start(self, preferred_name=None):
+        self.cameras = available_cameras()
+        self._populate_camera_combo(preferred_name)
+        self.vcam_button.setEnabled(bool(self.cameras))
+        if self.cameras:
+            self._start_camera()
+        else:
+            self._show_no_camera()
+
     def _start_camera(self):
         if not self.cameras:
             self._show_no_camera()
             return
 
+        self._stop_camera_source()
         self.source = CameraSource(self)
         self.source.frame_ready.connect(self._on_frame)
         self.source.error.connect(self._on_error)
         self.source.opened.connect(self._on_opened)
+        self.source_size = (0, 0)
         self._last_frame_at = None
         self.input_status.setText("카메라 여는 중")
+        self.preview.clear_frame("카메라를 여는 중...")
         self.source.start(self.camera_combo.currentData())
         self._schedule_camera_watchdog()
 
     def _refresh_cameras(self):
-        current = self.camera_combo.currentData()
-        preferred_name = current.description() if current is not None else None
-        self.cameras = available_cameras()
-        self._populate_camera_combo(preferred_name)
-        self.vcam_button.setEnabled(bool(self.cameras))
-
-        if not self.cameras:
-            if self.source is not None:
-                self.source.stop()
-            self._show_no_camera()
+        if self._camera_permission_status() != Qt.PermissionStatus.Granted:
+            self._ensure_camera_permission()
             return
 
+        current = self.camera_combo.currentData()
+        preferred_name = current.description() if current is not None else None
         self.status.showMessage("카메라 목록 새로고침 완료", 3000)
-        if self.source is None:
-            self._start_camera()
-        else:
-            self._last_frame_at = None
-            self.input_status.setText("카메라 여는 중")
-            self.source.start(self.camera_combo.currentData())
-            self._schedule_camera_watchdog()
+        self._load_cameras_and_start(preferred_name)
 
     def _schedule_camera_watchdog(self):
         QTimer.singleShot(3000, self._check_camera_watchdog)
@@ -416,6 +455,48 @@ class MainWindow(QMainWindow):
             "카메라 화면이 없으면 macOS 카메라 권한이나 다른 앱의 사용 여부를 확인하세요.",
             6000,
         )
+
+    def _stop_camera_source(self):
+        if self.source is not None:
+            self.source.stop()
+            self.source = None
+        self.source_size = (0, 0)
+        self._last_frame_at = None
+
+    def _show_camera_permission_pending(self):
+        self._stop_camera_source()
+        self.vcam.close()
+        self.vcam_button.setEnabled(False)
+        self.camera_combo.blockSignals(True)
+        self.camera_combo.clear()
+        self.camera_combo.addItem("카메라 권한 확인 중", None)
+        self.camera_combo.setEnabled(False)
+        self.camera_combo.blockSignals(False)
+        self.preview.clear_frame("macOS 카메라 권한을 요청하는 중...")
+        self.input_status.setText("카메라 권한 확인 중")
+        self.output_status.setText("송출 대기")
+        self.status.showMessage("카메라 권한 확인 중")
+
+    def _show_camera_permission_denied(self):
+        self._stop_camera_source()
+        self.vcam.close()
+        self.vcam_button.blockSignals(True)
+        self.vcam_button.setChecked(False)
+        self.vcam_button.setText("가상 카메라 시작")
+        self.vcam_button.setEnabled(False)
+        self.vcam_button.blockSignals(False)
+        self.camera_combo.blockSignals(True)
+        self.camera_combo.clear()
+        self.camera_combo.addItem("카메라 권한 필요", None)
+        self.camera_combo.setEnabled(False)
+        self.camera_combo.blockSignals(False)
+        self.preview.clear_frame(
+            "카메라 권한이 꺼져 있습니다.\n"
+            "시스템 설정 > 개인정보 보호 및 보안 > 카메라에서 webcam-blur를 켜세요."
+        )
+        self.input_status.setText("카메라 권한 필요")
+        self.output_status.setText("송출 불가")
+        self.status.showMessage("카메라 권한 필요")
 
     def _show_no_camera(self):
         self.source_size = (0, 0)
@@ -439,6 +520,7 @@ class MainWindow(QMainWindow):
             self.source_size = (0, 0)
             self._last_frame_at = None
             self.input_status.setText("카메라 여는 중")
+            self.preview.clear_frame("카메라를 여는 중...")
             self.status.showMessage(f"{device.description()} 여는 중")
             self.source.start(device)
             self._schedule_camera_watchdog()
