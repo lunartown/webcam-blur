@@ -59,6 +59,8 @@ def qimage_to_bgr(image):
     """QImage를 OpenCV가 쓰는 BGR numpy 배열로."""
     image = image.convertToFormat(QImage.Format.Format_BGR888)
     width, height = image.width(), image.height()
+    if width <= 0 or height <= 0:
+        return None
     stride = image.bytesPerLine()
     buffer = np.frombuffer(image.constBits(), dtype=np.uint8, count=stride * height)
     # 행마다 여백이 붙을 수 있어 실제 폭만 잘라낸다.
@@ -103,12 +105,6 @@ class CameraSource(QObject):
         self._session.setCamera(camera)
         camera.start()
 
-        if not camera.isActive():
-            # 권한이 없거나 다른 앱이 쓰고 있으면 여기서 걸린다.
-            self.error.emit(
-                f"{device.description()} 을(를) 시작하지 못했습니다. "
-                "카메라 권한이나 다른 앱의 사용 여부를 확인하세요.")
-
     def stop(self):
         if self._camera is not None:
             self._camera.stop()
@@ -123,10 +119,14 @@ class CameraSource(QObject):
         image = frame.toImage()
         if image.isNull():
             return
+        if image.width() <= 0 or image.height() <= 0:
+            return
 
         size = (image.width(), image.height())
         if size != self._size:
             self._size = size
             self.opened.emit(*size)
 
-        self.frame_ready.emit(qimage_to_bgr(image))
+        bgr = qimage_to_bgr(image)
+        if bgr is not None:
+            self.frame_ready.emit(bgr)

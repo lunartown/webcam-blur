@@ -28,6 +28,9 @@ class CameraConversionTest(unittest.TestCase):
         np.testing.assert_array_equal(bgr, rgb[:, :, ::-1])
         self.assertTrue(bgr.flags.owndata)
 
+    def test_qimage_to_bgr_ignores_empty_image(self):
+        self.assertIsNone(qimage_to_bgr(QImage()))
+
 
 if __name__ == "__main__":
     unittest.main()

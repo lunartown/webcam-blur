@@ -1,7 +1,7 @@
 """웹캠 화질 저하 GUI.
 
 회의 직전에 여는 도구라 조작은 카메라, 흐림 정도, 효과 On/Off, 가상 카메라
-송출만 둔다. UI는 macOS 기본 위젯 톤을 유지한다.
+송출만 둔다. UI는 macOS 유틸리티 앱처럼 조용하게 유지한다.
 """
 
 import os
@@ -16,7 +16,8 @@ from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
-    QFormLayout,
+    QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -36,6 +37,75 @@ from version import APP_VERSION
 
 PREVIEW_MIN_SIZE = (640, 360)
 
+APP_STYLE = """
+QWidget#root {
+    background: #f5f5f7;
+}
+
+QLabel#title {
+    color: #1d1d1f;
+    font-size: 19px;
+    font-weight: 600;
+}
+
+QLabel#subtitle,
+QLabel#caption,
+QLabel#fieldLabel {
+    color: #6e6e73;
+}
+
+QLabel#fieldLabel {
+    font-size: 12px;
+}
+
+QFrame#previewCard {
+    background: #101010;
+    border: 1px solid #d1d1d6;
+    border-radius: 12px;
+}
+
+QLabel#preview {
+    background: #101010;
+    color: #a1a1a6;
+    border-radius: 11px;
+}
+
+QFrame#controlsCard {
+    background: #ffffff;
+    border: 1px solid #d7d7dc;
+    border-radius: 12px;
+}
+
+QLabel#statusLine {
+    color: #3a3a3c;
+    font-size: 12px;
+}
+
+QLabel#statusMuted {
+    color: #8a8a8e;
+    font-size: 12px;
+}
+
+QPushButton#primaryButton {
+    min-width: 120px;
+    background: #1d1d1f;
+    border: 1px solid #1d1d1f;
+    border-radius: 6px;
+    color: #ffffff;
+    padding: 4px 12px;
+}
+
+QPushButton#primaryButton:checked {
+    background: #ffffff;
+    border-color: #b9b9bf;
+    color: #1d1d1f;
+}
+
+QStatusBar {
+    color: #6e6e73;
+}
+"""
+
 
 def to_pixmap(frame):
     """OpenCV BGR 프레임을 QPixmap으로."""
@@ -44,6 +114,41 @@ def to_pixmap(frame):
     # QImage는 버퍼를 복사하지 않으므로, numpy 배열이 사라지기 전에 복사해 둔다.
     image = QImage(rgb.data, w, h, 3 * w, QImage.Format_RGB888).copy()
     return QPixmap.fromImage(image)
+
+
+class PreviewLabel(QLabel):
+    """원본 프레임을 보관해 리사이즈 때도 프리뷰가 빈 화면이 되지 않게 한다."""
+
+    def __init__(self, text):
+        super().__init__(text)
+        self._source_pixmap = None
+        self.setAlignment(Qt.AlignCenter)
+        self.setMinimumSize(*PREVIEW_MIN_SIZE)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.setObjectName("preview")
+
+    def set_frame_pixmap(self, pixmap):
+        self._source_pixmap = pixmap
+        self.setText("")
+        self._update_scaled_pixmap()
+
+    def clear_frame(self, text):
+        self._source_pixmap = None
+        self.clear()
+        self.setText(text)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._update_scaled_pixmap()
+
+    def _update_scaled_pixmap(self):
+        if self._source_pixmap is None or self._source_pixmap.isNull():
+            return
+        self.setPixmap(
+            self._source_pixmap.scaled(
+                self.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation
+            )
+        )
 
 
 class MainWindow(QMainWindow):
@@ -61,6 +166,7 @@ class MainWindow(QMainWindow):
         self.source = None
         self.source_size = (0, 0)
         self._frame_times = []
+        self._last_frame_at = None
 
         self._build_ui()
         self._start_camera()
@@ -68,16 +174,18 @@ class MainWindow(QMainWindow):
     # ---------- UI 구성 ----------
 
     def _build_ui(self):
-        self.setMinimumSize(820, 540)
+        self.setMinimumSize(860, 580)
+        self.setStyleSheet(APP_STYLE)
 
         layout = QVBoxLayout()
-        layout.setContentsMargins(14, 14, 14, 6)
-        layout.setSpacing(10)
+        layout.setContentsMargins(18, 16, 18, 8)
+        layout.setSpacing(12)
         layout.addLayout(self._build_header())
-        layout.addWidget(self._build_preview(), stretch=1)
-        layout.addLayout(self._build_controls())
+        layout.addWidget(self._build_preview_card(), stretch=1)
+        layout.addWidget(self._build_controls_card())
 
         central = QWidget()
+        central.setObjectName("root")
         central.setLayout(layout)
         self.setCentralWidget(central)
 
@@ -92,10 +200,17 @@ class MainWindow(QMainWindow):
     def _build_header(self):
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(8)
+        row.setSpacing(10)
 
-        self.header_status = QLabel(f"webcam-blur {APP_VERSION}")
-        row.addWidget(self.header_status, stretch=1)
+        title_col = QVBoxLayout()
+        title_col.setSpacing(1)
+        title = QLabel("webcam-blur")
+        title.setObjectName("title")
+        subtitle = QLabel(f"v{APP_VERSION} · 프라이빗 가상 카메라")
+        subtitle.setObjectName("subtitle")
+        title_col.addWidget(title)
+        title_col.addWidget(subtitle)
+        row.addLayout(title_col, stretch=1)
 
         self.update_button = QPushButton("업데이트 확인")
         self.update_button.clicked.connect(self._check_for_updates)
@@ -106,29 +221,38 @@ class MainWindow(QMainWindow):
         row.addWidget(self.refresh_button)
         return row
 
-    def _build_preview(self):
-        self.preview = QLabel("카메라를 준비하는 중...")
-        self.preview.setAlignment(Qt.AlignCenter)
-        self.preview.setMinimumSize(*PREVIEW_MIN_SIZE)
-        self.preview.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.preview.setStyleSheet("background: black; color: #888;")
-        return self.preview
+    def _build_preview_card(self):
+        self.preview = PreviewLabel("카메라를 준비하는 중...")
 
-    def _build_controls(self):
-        form = QFormLayout()
-        form.setContentsMargins(0, 0, 0, 0)
-        form.setHorizontalSpacing(10)
-        form.setVerticalSpacing(8)
-        form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        layout = QVBoxLayout()
+        layout.setContentsMargins(1, 1, 1, 1)
+        layout.addWidget(self.preview)
 
+        frame = QFrame()
+        frame.setObjectName("previewCard")
+        frame.setLayout(layout)
+        return frame
+
+    def _build_controls_card(self):
+        grid = QGridLayout()
+        grid.setContentsMargins(14, 12, 14, 12)
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(8)
+
+        self.input_status = QLabel("입력 대기")
+        self.input_status.setObjectName("statusLine")
+        self.output_status = QLabel("송출 대기")
+        self.output_status.setObjectName("statusMuted")
+        grid.addWidget(self.input_status, 0, 0, 1, 3)
+        grid.addWidget(self.output_status, 0, 2, 1, 2, Qt.AlignRight)
+
+        grid.addWidget(self._field_label("카메라"), 1, 0)
         self.camera_combo = QComboBox()
         self.camera_combo.currentIndexChanged.connect(self._on_camera_changed)
         self._populate_camera_combo()
-        form.addRow("카메라", self.camera_combo)
+        grid.addWidget(self.camera_combo, 1, 1, 1, 3)
 
-        effect_row = QHBoxLayout()
-        effect_row.setSpacing(8)
-
+        grid.addWidget(self._field_label("흐림 정도"), 2, 0)
         self.preset_slider = QSlider(Qt.Horizontal)
         self.preset_slider.setRange(min(PRESETS), max(PRESETS))
         self.preset_slider.setValue(self.current_preset)
@@ -136,26 +260,40 @@ class MainWindow(QMainWindow):
         self.preset_slider.setTickInterval(1)
         self.preset_slider.setPageStep(1)
         self.preset_slider.valueChanged.connect(self._on_preset_changed)
+        grid.addWidget(self.preset_slider, 2, 1)
 
         self.preset_label = QLabel(PRESET_LABELS[self.current_preset])
-        self.preset_label.setFixedWidth(100)
+        self.preset_label.setObjectName("caption")
+        self.preset_label.setMinimumWidth(94)
+        grid.addWidget(self.preset_label, 2, 2)
 
+        actions = QHBoxLayout()
+        actions.setSpacing(8)
         self.toggle_button = QPushButton("효과 끄기")
         self.toggle_button.setCheckable(True)
         self.toggle_button.setChecked(True)
         self.toggle_button.toggled.connect(self._on_enabled_toggled)
+        actions.addWidget(self.toggle_button)
 
         self.vcam_button = QPushButton("가상 카메라 시작")
+        self.vcam_button.setObjectName("primaryButton")
         self.vcam_button.setCheckable(True)
         self.vcam_button.setEnabled(bool(self.cameras))
         self.vcam_button.toggled.connect(self._on_vcam_toggled)
+        actions.addWidget(self.vcam_button)
+        grid.addLayout(actions, 2, 3)
 
-        effect_row.addWidget(self.preset_slider, stretch=1)
-        effect_row.addWidget(self.preset_label)
-        effect_row.addWidget(self.toggle_button)
-        effect_row.addWidget(self.vcam_button)
-        form.addRow("흐림 정도", effect_row)
-        return form
+        grid.setColumnStretch(1, 1)
+
+        frame = QFrame()
+        frame.setObjectName("controlsCard")
+        frame.setLayout(grid)
+        return frame
+
+    def _field_label(self, text):
+        label = QLabel(text)
+        label.setObjectName("fieldLabel")
+        return label
 
     def _populate_camera_combo(self, preferred_name=None):
         self.camera_combo.blockSignals(True)
@@ -234,7 +372,10 @@ class MainWindow(QMainWindow):
         self.source.frame_ready.connect(self._on_frame)
         self.source.error.connect(self._on_error)
         self.source.opened.connect(self._on_opened)
+        self._last_frame_at = None
+        self.input_status.setText("카메라 여는 중")
         self.source.start(self.camera_combo.currentData())
+        self._schedule_camera_watchdog()
 
     def _refresh_cameras(self):
         current = self.camera_combo.currentData()
@@ -253,7 +394,28 @@ class MainWindow(QMainWindow):
         if self.source is None:
             self._start_camera()
         else:
+            self._last_frame_at = None
+            self.input_status.setText("카메라 여는 중")
             self.source.start(self.camera_combo.currentData())
+            self._schedule_camera_watchdog()
+
+    def _schedule_camera_watchdog(self):
+        QTimer.singleShot(3000, self._check_camera_watchdog)
+
+    def _check_camera_watchdog(self):
+        if (
+            self.source is None
+            or self.source_size != (0, 0)
+            or self._last_frame_at is not None
+        ):
+            return
+        device = self.camera_combo.currentData()
+        name = device.description() if device is not None else "카메라"
+        self.input_status.setText(f"{name} 프레임 대기 중")
+        self.status.showMessage(
+            "카메라 화면이 없으면 macOS 카메라 권한이나 다른 앱의 사용 여부를 확인하세요.",
+            6000,
+        )
 
     def _show_no_camera(self):
         self.source_size = (0, 0)
@@ -263,23 +425,32 @@ class MainWindow(QMainWindow):
         self.vcam_button.setText("가상 카메라 시작")
         self.vcam_button.setEnabled(False)
         self.vcam_button.blockSignals(False)
-        self.preview.setPixmap(QPixmap())
-        self.preview.setText(
+        self.preview.clear_frame(
             "사용 가능한 카메라를 찾지 못했습니다.\n"
             "시스템 설정 > 개인정보 보호 및 보안 > 카메라 권한을 확인하세요."
         )
+        self.input_status.setText("카메라 없음")
+        self.output_status.setText("송출 불가")
         self.status.showMessage("카메라 없음")
 
     def _on_camera_changed(self, *_args):
         device = self.camera_combo.currentData()
         if self.source is not None and device is not None:
+            self.source_size = (0, 0)
+            self._last_frame_at = None
+            self.input_status.setText("카메라 여는 중")
             self.status.showMessage(f"{device.description()} 여는 중")
             self.source.start(device)
+            self._schedule_camera_watchdog()
 
     def _on_opened(self, width, height):
         self.source_size = (width, height)
+        device = self.camera_combo.currentData()
+        name = device.description() if device is not None else "카메라"
+        self.input_status.setText(f"{name} · {width}x{height}")
 
     def _on_error(self, message):
+        self.input_status.setText("카메라 오류")
         self.status.showMessage(message, 5000)
 
     # ---------- 컨트롤 ----------
@@ -298,10 +469,12 @@ class MainWindow(QMainWindow):
     def _on_vcam_toggled(self, checked):
         if checked:
             self.vcam_button.setText("가상 카메라 중지")
+            self.output_status.setText("송출 준비 중")
             # 실제 연결은 첫 프레임을 보낼 때 이루어진다.
         else:
             self.vcam.close()
             self.vcam_button.setText("가상 카메라 시작")
+            self.output_status.setText("송출 대기")
         self._update_status()
 
     def _stop_vcam_with_error(self, message):
@@ -310,12 +483,19 @@ class MainWindow(QMainWindow):
         self.vcam_button.setChecked(False)
         self.vcam_button.setText("가상 카메라 시작")
         self.vcam_button.blockSignals(False)
+        self.output_status.setText("송출 오류")
         QMessageBox.warning(self, "가상 카메라를 열 수 없습니다", message)
 
     # ---------- 프레임 ----------
 
     def _on_frame(self, frame):
+        if frame is None or frame.size == 0:
+            return
+
+        self._last_frame_at = time.monotonic()
         out = self.reducer.process(frame)
+        if out is None or out.size == 0:
+            return
 
         if self.vcam_button.isChecked():
             # 좌우 반전 전의 화면을 보낸다. 반전된 걸 보내면 상대방에게
@@ -326,13 +506,7 @@ class MainWindow(QMainWindow):
                 self._stop_vcam_with_error(str(exc))
 
         # 미리보기만 거울 모드로 둔다. 자기 모습 확인엔 그게 자연스럽다.
-        pixmap = to_pixmap(cv2.flip(out, 1))
-        self.preview.setPixmap(
-            pixmap.scaled(
-                self.preview.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation
-            )
-        )
-
+        self.preview.set_frame_pixmap(to_pixmap(cv2.flip(out, 1)))
         self._frame_times.append(time.monotonic())
 
     def _update_status(self):
@@ -351,10 +525,16 @@ class MainWindow(QMainWindow):
         else:
             parts.append("효과 꺼짐")
         parts.append(f"{fps:.0f} fps")
+
         if self.vcam.running:
             parts.append(f"송출 중: {self.vcam.device_name}")
+            self.output_status.setText(f"{self.vcam.device_name} 송출 중")
         elif self.vcam_button.isChecked():
             parts.append("송출 준비 중")
+            self.output_status.setText("송출 준비 중")
+        else:
+            self.output_status.setText("송출 대기")
+
         self.status.showMessage("  |  ".join(parts))
 
     def closeEvent(self, event):
@@ -367,7 +547,7 @@ class MainWindow(QMainWindow):
 def main():
     app = QApplication(sys.argv)
     window = MainWindow()
-    window.resize(900, 560)
+    window.resize(920, 600)
     window.show()
     if os.environ.get("WEBCAM_BLUR_SMOKE_TEST"):
         QTimer.singleShot(1500, window.close)

@@ -49,10 +49,16 @@ class QualityReducer:
         self.use_blur = self.blur_strength > 0
 
     def process(self, frame):
+        if frame is None or frame.size == 0:
+            return None
+
         if not self.enabled:
             return frame
 
         h, w = frame.shape[:2]
+        if h <= 0 or w <= 0:
+            return None
+
         small_w = max(2, int(w * self.scale))
         small_h = max(2, int(h * self.scale))
 

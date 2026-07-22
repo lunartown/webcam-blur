@@ -25,6 +25,12 @@ class QualityReducerTest(unittest.TestCase):
         self.assertEqual(out.dtype, frame.dtype)
         self.assertFalse(np.array_equal(out, frame))
 
+    def test_process_ignores_empty_frame(self):
+        reducer = QualityReducer(preset=3)
+        frame = np.empty((0, 0, 3), dtype=np.uint8)
+
+        self.assertIsNone(reducer.process(frame))
+
     def test_apply_preset_updates_effective_resolution(self):
         reducer = QualityReducer(preset=1)
         reducer.apply_preset(5)
